@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { sql } from "@/lib/db";
 import { sendTelegramMessage } from "@/lib/telegram";
 import { createOauthState, buildStravaAuthorizeUrl } from "@/lib/strava";
-import { generateAiInsight } from "@/lib/openai"; // isi ini sudah pakai Groq
+import { generateAiInsight, generateCoachReply } from "@/lib/openai"; // isi ini sudah pakai Groq
 import { summarizeLoad, getCheckinSignals, pctChange } from "@/lib/training";
 
 export const runtime = "nodejs";
@@ -479,8 +479,8 @@ if (process.env.PRIVATE_MODE === "true") {
 
   try {
     await reply("🧠 (coach lagi mikir...)");
-    const payload = await buildCoachPayload(telegramUserId, text);
-    const aiText = await generateAiInsight(payload as any);
+  const payload = await buildCoachPayload(telegramUserId, text);
+  const aiText = await generateCoachReply(payload as any);
 
     // 3) store assistant message
     await addChatMessage(telegramUserId, "assistant", aiText);
