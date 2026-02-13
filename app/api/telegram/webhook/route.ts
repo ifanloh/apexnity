@@ -171,6 +171,14 @@ export async function POST(req: NextRequest) {
   const chatId = msg.chat.id as number;
   const telegramUserId = msg.from.id as number;
   const text = (msg.text || "").trim();
+  
+// ✅ PRIVATE MODE GUARD (paste di sini)
+if (process.env.PRIVATE_MODE === "true") {
+  if (String(telegramUserId) !== process.env.OWNER_TELEGRAM_ID) {
+    await sendTelegramMessage(chatId, "Bot ini masih private 😄");
+    return NextResponse.json({ ok: true });
+  }
+}
 
   // Upsert user
   await sql`
