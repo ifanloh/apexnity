@@ -75,3 +75,25 @@ export async function generateAiInsight(input: AiInsightInput): Promise<string> 
   const text = json?.choices?.[0]?.message?.content || "";
   return String(text || "").trim() || "AI tidak mengembalikan teks.";
 }
+
+export async function generateCoachReply(payload: any) {
+  const systemPrompt = `
+Kamu adalah AI endurance coach pribadi.
+Jawab seperti pelatih yang adaptif dan kontekstual.
+Jangan pakai format laporan kecuali diminta.
+Jawaban singkat, personal, dan actionable.
+`;
+
+  const userPrompt = `
+DATA ATLET:
+${JSON.stringify(payload.summary, null, 2)}
+
+PERTANYAAN USER:
+${payload.summary.coach_chat.user_message}
+
+Jawab langsung sesuai pertanyaan user.
+Jangan ulangi data kecuali relevan.
+`;
+
+  // panggil Groq seperti biasa
+}
