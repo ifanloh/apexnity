@@ -7,7 +7,11 @@ export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
   const secret = req.headers.get("x-telegram-bot-api-secret-token");
-  if (process.env.TELEGRAM_WEBHOOK_SECRET && secret !== process.env.TELEGRAM_WEBHOOK_SECRET) {
+  if (
+    process.env.TELEGRAM_WEBHOOK_SECRET &&
+    secret !== process.env.TELEGRAM_WEBHOOK_SECRET
+  ) {
+    // Always return 200 to Telegram to avoid retries
     return NextResponse.json({ ok: true });
   }
 
@@ -26,25 +30,44 @@ export async function POST(req: NextRequest) {
     DO UPDATE SET telegram_chat_id = EXCLUDED.telegram_chat_id, updated_at = NOW()
   `;
 
+  // Helper: plain text only (no markdown chars)
+  const reply = async (t: string) => {
+    await sendTelegramMessage(chatId, t);
+  };
+
   if (text.startsWith("/start")) {
-    await sendTelegramMessage(
-      chatId,
+    await reply(
       [
-        "Halo! Aku *AI Pro Trainer* kamu 👟🚴‍♂️🏋️‍♂️",
+        "Halo! Aku AI Pro Trainer kamu 👟🚴‍♂️🏋️‍♂️",
         "",
         "Perintah:",
-        "- /connect → sambungkan Strava",
-        "- /report → report aktivitas terakhir",
-        "- /checkin sleep=7 soreness=2 mood=4 note=ok",
+        "/connect  -> sambungkan Strava",
+        "/report   -> report aktivitas terakhir",
+        "/checkin sleep=7 soreness=2 mood=4 note=ok",
       ].join("\n")
     );
     return NextResponse.json({ ok: true });
   }
 
   if (text.startsWith("/connect")) {
+    if (!process.env.STRAVA_CLIENT_ID || !process.env.STRAVA_REDIRECT_URI) {
+      await reply(
+        "Konfigurasi Strava belum lengkap di server. Pastikan STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET, dan STRAVA_REDIRECT_URI sudah diisi di Vercel lalu redeploy."
+      );
+      return NextResponse.json({ ok: true });
+    }
+
     const state = await createOauthState(telegramUserId);
     const url = buildStravaAuthorizeUrl(state);
-    await sendTelegramMessage(chatId, `Klik untuk connect Strava:\n${url}\n\nSetelah connect, balik lagi ke Telegram.`);
+
+    await reply(
+      [
+        "Klik untuk connect Strava:",
+        url,
+        "",
+        "Setelah connect, balik lagi ke Telegram.",
+      ].join("\n")
+    );
     return NextResponse.json({ ok: true });
   }
 
@@ -56,20 +79,23 @@ export async function POST(req: NextRequest) {
       ORDER BY start_date DESC NULLS LAST
       LIMIT 1
     `;
+
     if (rows.length === 0) {
-      await sendTelegramMessage(chatId, "Belum ada aktivitas tersimpan. Coba /connect dulu ya.");
+      await reply("Belum ada aktivitas tersimpan. Coba /connect dulu ya.");
     } else {
       const a = rows[0] as any;
-      await sendTelegramMessage(
-        chatId,
+      await reply(
         [
-          "🗂️ *Last Activity*",
-          `Nama: *${a.name || "-"}*`,
+          "Last Activity",
+          `Nama: ${a.name || "-"}`,
           `Tipe: ${a.type || "-"}`,
           `Jarak: ${((a.distance_m || 0) / 1000).toFixed(2)} km`,
           `Durasi: ${Math.round((a.moving_time_s || 0) / 60)} min`,
           `Elev: ${a.elev_gain_m ?? 0} m`,
-        ].join("\n")
+          a.avg_hr ? `Avg HR: ${a.avg_hr}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n")
       );
     }
     return NextResponse.json({ ok: true });
@@ -109,10 +135,11 @@ export async function POST(req: NextRequest) {
                     note = EXCLUDED.note
     `;
 
-    await sendTelegramMessage(chatId, "✅ Check-in tersimpan. Makasih!");
+    await reply("✅ Check-in tersimpan. Makasih!");
     return NextResponse.json({ ok: true });
   }
 
-  await sendTelegramMessage(chatId, "Perintah tersedia: /connect, /report, /checkin");
+  await reply("Perintah tersedia: /connect, /report, /checkin");
   return NextResponse.json({ ok: true });
 }
+
