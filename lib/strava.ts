@@ -20,22 +20,21 @@ export async function createOauthState(telegramUserId: number) {
 }
 
 export function buildStravaAuthorizeUrl(state: string) {
-  const clientId = process.env.STRAVA_CLIENT_ID;
-  const redirectURL = process.env.STRAVA_REDIRECT_URL;
-  if (!clientId || !redirectURL) throw new Error("Missing STRAVA_CLIENT_ID/STRAVA_REDIRECT_URL");
+  const clientId = mustEnv("STRAVA_CLIENT_ID");
+  const redirectURL = mustEnv("STRAVA_REDIRECT_URL"); // env kamu tetap _URL
 
-const params = new URLSearchParams({
-  client_id: clientId,
-  response_type: "code",
-  redirect_uri: redirectUrl, //
-  approval_prompt: "auto",
-  scope: "read,activity:read_all",
-  state,
-});
-
+  const params = new URLSearchParams({
+    client_id: clientId,
+    response_type: "code",
+    redirect_uri: redirectURL, // ✅ nama parameter WAJIB redirect_uri
+    approval_prompt: "auto",
+    scope: "read,activity:read_all",
+    state,
+  });
 
   return `https://www.strava.com/oauth/authorize?${params.toString()}`;
 }
+
 
 export async function exchangeCodeForToken(code: string): Promise<TokenResponse> {
   const clientId = process.env.STRAVA_CLIENT_ID;
