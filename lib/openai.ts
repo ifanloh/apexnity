@@ -1,99 +1,72 @@
 export type AiInsightInput = {
-  days: number;
-  summary: {
-    sessions: number;
-    total_km: number;
-    total_hours: number;
-    total_elev_m: number;
-    by_type: Record<string, { sessions: number; km: number; hours: number; elev_m: number }>;
-    last_7_activities: Array<{
-      start_date: string | null;
-      name: string | null;
-      type: string | null;
-      km: number;
-      minutes: number;
-      elev_m: number;
-      avg_hr: number | null;
-    }>;
-    checkins_last_days: Array<{
-      day: string;
-      sleep_hours: number | null;
-      soreness: number | null;
-      mood: number | null;
-      note: string | null;
-    }>;
-  };
-};
-
+// =========================
+// 1) MODE: INSIGHT (laporan)
+// =========================
 export async function generateAiInsight(input: AiInsightInput): Promise<string> {
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) throw new Error("Missing GROQ_API_KEY");
-
-  const model = process.env.GROQ_MODEL || "llama-3.1-8b-instant";
-
   const system = [
     "Kamu adalah pelatih endurance + strength (trail/cycling/strength).",
     "Berikan analisis singkat, konkret, dan bisa langsung dilakukan.",
     "Gunakan data yang diberikan saja. Jika ada yang kurang, sebutkan asumsi singkat.",
     "Output wajib Bahasa Indonesia.",
-    "Format output:",
+    "Format output WAJIB:",
     "1) Ringkasan kondisi (3-5 kalimat)",
     "2) Temuan utama (bullet 3-5)",
     "3) Rekomendasi 3 hari ke depan (Day 1/Day 2/Day 3)",
     "4) Recovery checklist (bullet 3-6)",
   ].join("\n");
 
-  const payload = {
-    days: input.days,
-    data: input.summary,
-  };
-
-  // Groq OpenAI-compatible Chat Completions endpoint
-  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: JSON.stringify(payload) },
-      ],
-      temperature: 0.4,
-      max_tokens: 550,
-    }),
-  });
-
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`Groq error: ${res.status} ${t}`);
-  }
-
-  const json: any = await res.json();
-  const text = json?.choices?.[0]?.message?.content || "";
-  return String(text || "").trim() || "AI tidak mengembalikan teks.";
+  const payload = { days: input.days, data: input.summary };
+  return groqChat(system, JSON.stringify(payload), { temperature: 0.35, maxTokens: 650 });
 }
 
-export async function generateCoachReply(payload: any) {
-  const systemPrompt = `
-Kamu adalah AI endurance coach pribadi.
-Jawab seperti pelatih yang adaptif dan kontekstual.
-Jangan pakai format laporan kecuali diminta.
-Jawaban singkat, personal, dan actionable.
-`;
+// =========================
+// 2) MODE: COACH CHAT (bebas)
+// =========================
+export async function generateCoachReply(input: AiInsightInput): Promise<string> {
+  const system = [
+    "Kamu adalah AI coach pribadi (trail/cycling/strength).",
+    "Ini MODE CHAT (konsultasi bebas).",
+    "Jawab LANGSUNG sesuai pertanyaan user — jangan pakai template laporan kecuali user minta.",
+    "Boleh bertanya balik maksimal 1 pertanyaan klarifikasi kalau perlu.",
+    "Gaya: ringkas, spesifik, actionable.",
+    "Kalau user tanya latihan hari ini/besok: beri rekomendasi jelas (durasi, intensitas, opsi alternatif).",
+    "Kalau ada indikasi cedera serius (nyeri tajam, bengkak, kesemutan, pusing, nyeri dada): sarankan stop dan konsultasi profesional.",
+    "Output Bahasa Indonesia.",
+  ].join("\n");
 
-  const userPrompt = `
-DATA ATLET:
-${JSON.stringify(payload.summary, null, 2)}
+  // input.summary.coach_chat berisi user_message + recent_chat
+  const userMessage = input?.summary?.coach_chat?.user_message || "";
+  const recent = input?.summary?.coach_chat?.recent_chat || [];
 
-PERTANYAAN USER:
-${payload.summary.coach_chat.user_message}
+  // Kita gabungkan memory pendek supaya jawaban tidak terasa sama
+  const memoryText = Array.isArray(recent) && recent.length
+    ? recent
+        .map((m: any) => `${m.role === "assistant" ? "Coach" : "User"}: ${String(m.content || "")}`)
+        .join("\n")
+    : "";
 
-Jawab langsung sesuai pertanyaan user.
-Jangan ulangi data kecuali relevan.
-`;
+  const user = [
+    "KONTEKS ATLET (ringkas, gunakan seperlunya):",
+    JSON.stringify(
+      {
+        trend: input?.summary?.trend,
+        fatigue_index: input?.summary?.fatigue_index,
+        profile: input?.summary?.profile,
+        last_activities: input?.summary?.last_7_activities,
+        checkins: input?.summary?.checkins_last_days,
+      },
+      null,
+      2
+    ),
+    "",
+    memoryText ? "RIWAYAT CHAT TERAKHIR:" : "",
+    memoryText || "",
+    "",
+    "PERTANYAAN USER:",
+    userMessage,
+    "",
+    "Instruksi: Jawab sesuai pertanyaan user. Jangan mengulang angka-angka kecuali relevan. Jangan pakai format 1)-4) kecuali diminta.",
+  ].join("\n");
 
-  // panggil Groq seperti biasa
+  return groqChat(system, user, { temperature: 0.55, maxTokens: 500 });
 }
