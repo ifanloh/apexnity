@@ -465,12 +465,6 @@ export async function POST(req: NextRequest) {
   // =========================
   // AI CHAT (non-command text)
   // =========================
-  // 1) rate limit
-  const limit = await checkAndIncDailyLimit(telegramUserId, 30);
-  if (!limit.ok) {
-    await reply(`Limit AI harian tercapai (${limit.curr}/${limit.maxPerDay}). Coba besok ya.`);
-    return NextResponse.json({ ok: true });
-  }
 
   // 2) store user message
   await addChatMessage(telegramUserId, "user", text);
