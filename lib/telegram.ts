@@ -7,8 +7,7 @@ export async function sendTelegramMessage(chatId: number | string, text: string)
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       chat_id: chatId,
-      text,
-      parse_mode: "Markdown",
+      text, // plain text (tanpa parse_mode)
       disable_web_page_preview: true,
     }),
   });
@@ -18,3 +17,4 @@ export async function sendTelegramMessage(chatId: number | string, text: string)
     throw new Error(`Telegram sendMessage failed: ${res.status} ${body}`);
   }
 }
+
