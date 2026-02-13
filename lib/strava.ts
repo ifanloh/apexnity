@@ -24,14 +24,15 @@ export function buildStravaAuthorizeUrl(state: string) {
   const redirectURL = process.env.STRAVA_REDIRECT_URL;
   if (!clientId || !redirectURL) throw new Error("Missing STRAVA_CLIENT_ID/STRAVA_REDIRECT_URL");
 
-  const params = new URLSearchParams({
-    client_id: clientId,
-    response_type: "code",
-    redirect_URL: redirectURL,
-    approval_prompt: "auto",
-    scope: "read,activity:read_all",
-    state,
-  });
+const params = new URLSearchParams({
+  client_id: clientId,
+  response_type: "code",
+  redirect_uri: redirectUrl, //
+  approval_prompt: "auto",
+  scope: "read,activity:read_all",
+  state,
+});
+
 
   return `https://www.strava.com/oauth/authorize?${params.toString()}`;
 }
