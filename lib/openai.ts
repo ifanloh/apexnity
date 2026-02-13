@@ -26,15 +26,15 @@ export type AiInsightInput = {
 };
 
 export async function generateAiInsight(input: AiInsightInput): Promise<string> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("Missing OPENAI_API_KEY");
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) throw new Error("Missing GROQ_API_KEY");
 
-  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  const model = process.env.GROQ_MODEL || "llama-3.1-8b-instant";
 
   const system = [
     "Kamu adalah pelatih endurance + strength (trail/cycling/strength).",
     "Berikan analisis singkat, konkret, dan bisa langsung dilakukan.",
-    "Gunakan data yang diberikan saja. Jika ada yang kurang, sebutkan asumsi dengan singkat.",
+    "Gunakan data yang diberikan saja. Jika ada yang kurang, sebutkan asumsi singkat.",
     "Output wajib Bahasa Indonesia.",
     "Format output:",
     "1) Ringkasan kondisi (3-5 kalimat)",
@@ -48,7 +48,8 @@ export async function generateAiInsight(input: AiInsightInput): Promise<string> 
     data: input.summary,
   };
 
-  const res = await fetch("https://api.openai.com/v1/responses", {
+  // Groq OpenAI-compatible Chat Completions endpoint
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -56,24 +57,21 @@ export async function generateAiInsight(input: AiInsightInput): Promise<string> 
     },
     body: JSON.stringify({
       model,
-      input: [
+      messages: [
         { role: "system", content: system },
         { role: "user", content: JSON.stringify(payload) },
       ],
-      max_output_tokens: 500,
+      temperature: 0.4,
+      max_tokens: 550,
     }),
   });
 
   if (!res.ok) {
     const t = await res.text();
-    throw new Error(`OpenAI error: ${res.status} ${t}`);
+    throw new Error(`Groq error: ${res.status} ${t}`);
   }
 
   const json: any = await res.json();
-  const text =
-    json?.output_text ||
-    json?.output?.[0]?.content?.map((c: any) => c?.text).filter(Boolean).join("\n") ||
-    "";
-
+  const text = json?.choices?.[0]?.message?.content || "";
   return String(text || "").trim() || "AI tidak mengembalikan teks.";
 }
