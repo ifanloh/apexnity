@@ -1,6 +1,12 @@
 import crypto from "crypto";
 import { sql } from "./db";
 
+function mustEnv(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing ${name}`);
+  return v;
+}
+
 type TokenResponse = {
   token_type: string;
   access_token: string;
