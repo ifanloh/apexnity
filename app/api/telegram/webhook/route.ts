@@ -50,9 +50,9 @@ export async function POST(req: NextRequest) {
   }
 
   if (text.startsWith("/connect")) {
-    if (!process.env.STRAVA_CLIENT_ID || !process.env.STRAVA_REDIRECT_URI) {
+    if (!process.env.STRAVA_CLIENT_ID || !process.env.STRAVA_REDIRECT_URL) {
       await reply(
-        "Konfigurasi Strava belum lengkap di server. Pastikan STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET, dan STRAVA_REDIRECT_URI sudah diisi di Vercel lalu redeploy."
+        "Konfigurasi Strava belum lengkap di server. Pastikan STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET, dan STRAVA_REDIRECT_URL sudah diisi di Vercel lalu redeploy."
       );
       return NextResponse.json({ ok: true });
     }
