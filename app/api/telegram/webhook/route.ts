@@ -2,17 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { sql } from "@/lib/db";
 import { sendTelegramMessage } from "@/lib/telegram";
 import { createOauthState, buildStravaAuthorizeUrl } from "@/lib/strava";
-import { generateAiInsight } from "@/lib/openai";
+import { generateAiInsight } from "@/lib/openai"; // (isi file ini sudah kamu ganti ke Groq)
+import { summarizeLoad, pctChange, getCheckinSignals } from "@/lib/training";
 
 export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
-  // Telegram secret check (optional)
   const secret = req.headers.get("x-telegram-bot-api-secret-token");
-  if (
-    process.env.TELEGRAM_WEBHOOK_SECRET &&
-    secret !== process.env.TELEGRAM_WEBHOOK_SECRET
-  ) {
+  if (process.env.TELEGRAM_WEBHOOK_SECRET && secret !== process.env.TELEGRAM_WEBHOOK_SECRET) {
     return NextResponse.json({ ok: true });
   }
 
@@ -24,7 +21,6 @@ export async function POST(req: NextRequest) {
   const telegramUserId = msg.from.id as number;
   const text = (msg.text || "").trim();
 
-  // Upsert user mapping
   await sql`
     INSERT INTO users (telegram_user_id, telegram_chat_id)
     VALUES (${telegramUserId}, ${chatId})
@@ -32,63 +28,150 @@ export async function POST(req: NextRequest) {
     DO UPDATE SET telegram_chat_id = EXCLUDED.telegram_chat_id, updated_at = NOW()
   `;
 
-  const reply = async (t: string) => {
-    await sendTelegramMessage(chatId, t);
-  };
+  const reply = async (t: string) => sendTelegramMessage(chatId, t);
 
-  // -------------------------
   // /start
-  // -------------------------
   if (text.startsWith("/start")) {
     await reply(
       [
         "Halo! Aku AI Pro Trainer kamu 👟🚴‍♂️🏋️‍♂️",
         "",
-        "Perintah:",
-        "/connect            -> sambungkan Strava",
-        "/report             -> aktivitas terakhir (dari DB)",
-        "/sync 7d            -> minta approval tarik histori 7 hari",
-        "/syncgo 7           -> eksekusi tarik histori (setelah approval)",
-        "/insight 7d          -> insight basic (tanpa AI)",
-        "/aiinsight 7d        -> insight pakai AI (OpenAI)",
+        "Perintah utama:",
+        "/connect               -> sambungkan Strava",
+        "/sync 7d               -> minta approval tarik histori",
+        "/syncgo 7              -> eksekusi tarik histori",
+        "/insight 7d             -> insight basic",
+        "/aiinsight 7d           -> insight AI (Groq)",
+        "/plan 7d                -> generate weekly plan 7 hari",
+        "",
+        "Profile & coaching:",
+        "/profile                -> lihat profile",
+        "/setgoal text=UTMB110K date=2026-08-15",
+        "/setpref sports=trail,cycling,strength days=5",
+        "/autocoach on|off",
+        "",
+        "Check-in:",
         "/checkin sleep=7 soreness=2 mood=4 note=ok",
       ].join("\n")
     );
     return NextResponse.json({ ok: true });
   }
 
-  // -------------------------
+  // /profile
+  if (text.startsWith("/profile")) {
+    const rows = await sql`
+      SELECT goal_text, goal_date, preferred_sports, training_days_per_week, auto_coach_enabled
+      FROM users
+      WHERE telegram_user_id = ${telegramUserId}
+      LIMIT 1
+    `;
+    const u = rows[0] as any;
+    await reply(
+      [
+        "Profile kamu:",
+        `Goal: ${u?.goal_text || "-"}`,
+        `Goal date: ${u?.goal_date ? String(u.goal_date).slice(0, 10) : "-"}`,
+        `Preferred sports: ${u?.preferred_sports || "-"}`,
+        `Training days/week: ${u?.training_days_per_week ?? "-"}`,
+        `Auto coach: ${u?.auto_coach_enabled === false ? "OFF" : "ON"}`,
+      ].join("\n")
+    );
+    return NextResponse.json({ ok: true });
+  }
+
+  // /setgoal text=... date=YYYY-MM-DD
+  if (text.startsWith("/setgoal")) {
+    const args = Object.fromEntries(
+      text
+        .replace("/setgoal", "")
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((kv: string) => {
+          const [k, ...rest] = kv.split("=");
+          return [k, rest.join("=")];
+        })
+    );
+
+    const goalText = args.text ? String(args.text) : null;
+    const goalDate = args.date ? String(args.date) : null;
+
+    await sql`
+      UPDATE users
+      SET goal_text = ${goalText},
+          goal_date = ${goalDate ? (goalDate as any) : null},
+          updated_at = NOW()
+      WHERE telegram_user_id = ${telegramUserId}
+    `;
+
+    await reply("✅ Goal tersimpan. Coba /profile untuk cek.");
+    return NextResponse.json({ ok: true });
+  }
+
+  // /setpref sports=trail,cycling,strength days=5
+  if (text.startsWith("/setpref")) {
+    const args = Object.fromEntries(
+      text
+        .replace("/setpref", "")
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((kv: string) => {
+          const [k, ...rest] = kv.split("=");
+          return [k, rest.join("=")];
+        })
+    );
+
+    const sports = args.sports ? String(args.sports) : null;
+    const days = args.days ? Number(args.days) : null;
+
+    await sql`
+      UPDATE users
+      SET preferred_sports = ${sports},
+          training_days_per_week = ${days},
+          updated_at = NOW()
+      WHERE telegram_user_id = ${telegramUserId}
+    `;
+
+    await reply("✅ Preferensi tersimpan. Coba /profile untuk cek.");
+    return NextResponse.json({ ok: true });
+  }
+
+  // /autocoach on|off
+  if (text.startsWith("/autocoach")) {
+    const on = /\/autocoach\s+on/i.test(text);
+    const off = /\/autocoach\s+off/i.test(text);
+    if (!on && !off) {
+      await reply("Format: /autocoach on atau /autocoach off");
+      return NextResponse.json({ ok: true });
+    }
+
+    await sql`
+      UPDATE users
+      SET auto_coach_enabled = ${on ? true : false},
+          updated_at = NOW()
+      WHERE telegram_user_id = ${telegramUserId}
+    `;
+    await reply(`✅ Auto coach ${on ? "ON" : "OFF"}.`);
+    return NextResponse.json({ ok: true });
+  }
+
   // /connect
-  // -------------------------
   if (text.startsWith("/connect")) {
-    if (
-      !process.env.STRAVA_CLIENT_ID ||
-      !process.env.STRAVA_CLIENT_SECRET ||
-      !process.env.STRAVA_REDIRECT_URL
-    ) {
+    if (!process.env.STRAVA_CLIENT_ID || !process.env.STRAVA_CLIENT_SECRET || !process.env.STRAVA_REDIRECT_URL) {
       await reply(
-        "Konfigurasi Strava belum lengkap di server. Pastikan STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET, dan STRAVA_REDIRECT_URL sudah diisi di Vercel lalu redeploy."
+        "Konfigurasi Strava belum lengkap di server. Pastikan STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET, STRAVA_REDIRECT_URL sudah diisi di Vercel lalu redeploy."
       );
       return NextResponse.json({ ok: true });
     }
 
     const state = await createOauthState(telegramUserId);
     const url = buildStravaAuthorizeUrl(state);
-
-    await reply(
-      [
-        "Klik untuk connect Strava:",
-        url,
-        "",
-        "Setelah connect, balik lagi ke Telegram.",
-      ].join("\n")
-    );
+    await reply(["Klik untuk connect Strava:", url, "", "Setelah connect, balik lagi ke Telegram."].join("\n"));
     return NextResponse.json({ ok: true });
   }
 
-  // -------------------------
   // /report
-  // -------------------------
   if (text.startsWith("/report")) {
     const rows = await sql`
       SELECT name, type, distance_m, moving_time_s, elev_gain_m, avg_hr, start_date
@@ -99,9 +182,7 @@ export async function POST(req: NextRequest) {
     `;
 
     if (rows.length === 0) {
-      await reply(
-        "Belum ada aktivitas tersimpan di database.\nKalau mau tarik histori 7 hari terakhir: /sync 7d"
-      );
+      await reply("Belum ada aktivitas tersimpan. Kalau mau tarik histori: /sync 7d");
     } else {
       const a = rows[0] as any;
       await reply(
@@ -121,17 +202,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  // -------------------------
-  // IMPORTANT ORDER:
   // /syncgo must be before /sync
-  // -------------------------
   if (text.startsWith("/syncgo")) {
     const m = text.match(/\/syncgo\s+(\d+)\s*d?/i);
     const days = m ? Number(m[1]) : 7;
 
     const baseUrl = process.env.APP_BASE_URL;
     const jobSecret = process.env.INTERNAL_JOB_SECRET;
-
     if (!baseUrl || !jobSecret) {
       await reply("Server belum lengkap konfigurasi APP_BASE_URL / INTERNAL_JOB_SECRET.");
       return NextResponse.json({ ok: true });
@@ -139,10 +216,7 @@ export async function POST(req: NextRequest) {
 
     const res = await fetch(`${baseUrl}/api/jobs/backfill`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-internal-job-secret": jobSecret,
-      },
+      headers: { "Content-Type": "application/json", "x-internal-job-secret": jobSecret },
       body: JSON.stringify({ telegramUserId, days }),
     });
 
@@ -152,7 +226,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
-    await reply(`✅ Sync sukses.\n${payload}\n\nKetik /insight ${days}d atau /aiinsight ${days}d`);
+    // optional: update daily aggregates for last 14 days
+    await fetch(`${baseUrl}/api/jobs/daily-aggregate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-internal-job-secret": jobSecret },
+      body: JSON.stringify({ telegramUserId, days: Math.max(14, days) }),
+    }).catch(() => null);
+
+    await reply(`✅ Sync sukses.\n${payload}\n\nKetik /aiinsight ${days}d atau /plan 7d`);
     return NextResponse.json({ ok: true });
   }
 
@@ -160,66 +241,53 @@ export async function POST(req: NextRequest) {
     const m = text.match(/\/sync\s+(\d+)\s*d?/i);
     const days = m ? Number(m[1]) : 7;
 
-    await reply(
-      `Konfirmasi: aku akan menarik histori aktivitas ${days} hari terakhir dari Strava.\nBalas: /syncgo ${days}`
-    );
+    await reply(`Konfirmasi: aku akan menarik histori aktivitas ${days} hari terakhir.\nBalas: /syncgo ${days}`);
     return NextResponse.json({ ok: true });
   }
 
-  // -------------------------
-  // /insight (basic, rule-based)
-  // -------------------------
+  // /insight (basic)
   if (text.startsWith("/insight")) {
     const m = text.match(/\/insight\s+(\d+)\s*d?/i);
     const days = m ? Number(m[1]) : 7;
 
-    const rows = await sql`
-      SELECT
-        COUNT(*)::int AS sessions,
-        COALESCE(SUM(distance_m),0)::int AS dist_m,
-        COALESCE(SUM(moving_time_s),0)::int AS time_s,
-        COALESCE(SUM(elev_gain_m),0)::int AS elev_m
-      FROM activities
-      WHERE telegram_user_id = ${telegramUserId}
-        AND start_date >= NOW() - (${days}::int * INTERVAL '1 day')
-    `;
-
-    const r = rows[0] as any;
-    const sessions = r.sessions || 0;
-
-    if (sessions === 0) {
-      await reply(`Belum ada data ${days} hari terakhir. Mau tarik histori? ketik: /sync ${days}d`);
+    const w = await summarizeLoad(telegramUserId, days);
+    if (w.sessions === 0) {
+      await reply(`Belum ada data ${days} hari terakhir. Mau tarik histori? /sync ${days}d`);
       return NextResponse.json({ ok: true });
     }
 
-    const km = (Number(r.dist_m) / 1000).toFixed(1);
-    const hrs = (Number(r.time_s) / 3600).toFixed(1);
-    const elev = Number(r.elev_m);
-
-    const avgKm = (Number(r.dist_m) / 1000 / sessions).toFixed(1);
-    const avgElev = Math.round(elev / sessions);
-
     await reply(
       [
-        `📈 Insight ${days} hari terakhir (basic)`,
-        `Sesi: ${sessions}`,
-        `Total jarak: ${km} km`,
-        `Total durasi: ${hrs} jam`,
-        `Total elev: ${elev} m`,
+        `📈 Insight ${days} hari (basic)`,
+        `Sesi: ${w.sessions}`,
+        `Total: ${w.total_km} km | ${w.total_hours} jam | elev ${w.total_elev_m} m`,
+        `By type: ${Object.entries(w.by_type)
+          .map(([k, v]) => `${k}(${v.sessions})`)
+          .join(", ") || "-"}`,
         "",
-        `Rata-rata per sesi: ${avgKm} km, elev ${avgElev} m`,
-        "Saran: kalau hari ini belum latihan, pilih easy 30–45 menit atau strength ringan 20–30 menit.",
+        "Untuk insight AI: /aiinsight 7d",
       ].join("\n")
     );
     return NextResponse.json({ ok: true });
   }
 
-  // -------------------------
-  // /aiinsight (OpenAI)
-  // -------------------------
+  // /aiinsight (Groq)
   if (text.startsWith("/aiinsight")) {
     const m = text.match(/\/aiinsight\s+(\d+)\s*d?/i);
     const days = m ? Number(m[1]) : 7;
+
+    const nowWeek = await summarizeLoad(telegramUserId, 7);
+    const prevRows = await sql`
+      SELECT COALESCE(SUM(moving_time_s),0)::bigint AS time_s
+      FROM activities
+      WHERE telegram_user_id = ${telegramUserId}
+        AND start_date >= NOW() - (14 * INTERVAL '1 day')
+        AND start_date < NOW() - (7 * INTERVAL '1 day')
+    `;
+    const prevHours = Number((prevRows[0] as any).time_s || 0) / 3600;
+    const delta = pctChange(nowWeek.total_hours, prevHours);
+
+    const { fatigue, checkins } = await getCheckinSignals(telegramUserId, 7);
 
     const actRows = await sql`
       SELECT type, name, start_date, distance_m, moving_time_s, elev_gain_m, avg_hr
@@ -229,99 +297,57 @@ export async function POST(req: NextRequest) {
       ORDER BY start_date DESC NULLS LAST
       LIMIT 50
     `;
-
     if (actRows.length === 0) {
-      await reply(
-        `Belum ada data aktivitas ${days} hari terakhir di DB.\nKalau mau tarik histori: /sync ${days}d`
-      );
+      await reply(`Belum ada data aktivitas ${days} hari terakhir. Coba /sync ${days}d`);
       return NextResponse.json({ ok: true });
     }
 
-    const chkRows = await sql`
-      SELECT day, sleep_hours, soreness, mood, note
-      FROM checkins
+    const userRows = await sql`
+      SELECT goal_text, goal_date, preferred_sports, training_days_per_week
+      FROM users
       WHERE telegram_user_id = ${telegramUserId}
-        AND day >= (CURRENT_DATE - (${days}::int * INTERVAL '1 day'))
-      ORDER BY day DESC
-      LIMIT 60
+      LIMIT 1
     `;
+    const prof = userRows[0] as any;
 
-    // Summarize
-    let sessions = 0;
-    let total_m = 0;
-    let total_s = 0;
-    let total_elev = 0;
-
-    const byType: Record<
-      string,
-      { sessions: number; km: number; hours: number; elev_m: number }
-    > = {};
-
-    const lastActs = (actRows as any[]).slice(0, 7).map((a) => {
-      const km = Number((Number(a.distance_m || 0) / 1000).toFixed(2));
-      const minutes = Math.round(Number(a.moving_time_s || 0) / 60);
-      const elev_m = Number(a.elev_gain_m ?? 0);
-      const avg_hr =
-        a.avg_hr !== null && a.avg_hr !== undefined ? Number(a.avg_hr) : null;
-
-      return {
-        start_date: a.start_date ? new Date(a.start_date).toISOString() : null,
-        name: a.name || null,
-        type: a.type || null,
-        km,
-        minutes,
-        elev_m,
-        avg_hr,
-      };
-    });
-
-    for (const a of actRows as any[]) {
-      sessions += 1;
-      const m0 = Number(a.distance_m || 0);
-      const s0 = Number(a.moving_time_s || 0);
-      const e0 = Number(a.elev_gain_m ?? 0);
-
-      total_m += m0;
-      total_s += s0;
-      total_elev += e0;
-
-      const t = String(a.type || "Other");
-      if (!byType[t]) byType[t] = { sessions: 0, km: 0, hours: 0, elev_m: 0 };
-      byType[t].sessions += 1;
-      byType[t].km += m0 / 1000;
-      byType[t].hours += s0 / 3600;
-      byType[t].elev_m += e0;
-    }
-
-    for (const k of Object.keys(byType)) {
-      byType[k].km = Number(byType[k].km.toFixed(1));
-      byType[k].hours = Number(byType[k].hours.toFixed(1));
-      byType[k].elev_m = Math.round(byType[k].elev_m);
-    }
+    const lastActs = (actRows as any[]).slice(0, 7).map((a) => ({
+      start_date: a.start_date ? new Date(a.start_date).toISOString() : null,
+      name: a.name || null,
+      type: a.type || null,
+      km: Number((Number(a.distance_m || 0) / 1000).toFixed(2)),
+      minutes: Math.round(Number(a.moving_time_s || 0) / 60),
+      elev_m: Number(a.elev_gain_m ?? 0),
+      avg_hr: a.avg_hr != null ? Number(a.avg_hr) : null,
+    }));
 
     const payload = {
       days,
       summary: {
-        sessions,
-        total_km: Number((total_m / 1000).toFixed(1)),
-        total_hours: Number((total_s / 3600).toFixed(1)),
-        total_elev_m: Math.round(total_elev),
-        by_type: byType,
+        sessions: nowWeek.sessions,
+        total_km: nowWeek.total_km,
+        total_hours: nowWeek.total_hours,
+        total_elev_m: nowWeek.total_elev_m,
+        by_type: nowWeek.by_type,
         last_7_activities: lastActs,
-        checkins_last_days: (chkRows as any[]).map((c) => ({
+        checkins_last_days: (checkins as any[]).map((c) => ({
           day: String(c.day),
-          sleep_hours:
-            c.sleep_hours !== null && c.sleep_hours !== undefined
-              ? Number(c.sleep_hours)
-              : null,
-          soreness:
-            c.soreness !== null && c.soreness !== undefined
-              ? Number(c.soreness)
-              : null,
-          mood:
-            c.mood !== null && c.mood !== undefined ? Number(c.mood) : null,
-          note: c.note ? String(c.note) : null,
+          sleep_hours: c.sleep_hours != null ? Number(c.sleep_hours) : null,
+          soreness: c.soreness != null ? Number(c.soreness) : null,
+          mood: c.mood != null ? Number(c.mood) : null,
+          note: null,
         })),
+        trend: {
+          prev_week_hours: Number(prevHours.toFixed(1)),
+          curr_week_hours: nowWeek.total_hours,
+          week_over_week_change_pct: delta == null ? null : Number((delta * 100).toFixed(0)),
+        },
+        fatigue_index: fatigue,
+        profile: {
+          goal_text: prof?.goal_text || null,
+          goal_date: prof?.goal_date ? String(prof.goal_date).slice(0, 10) : null,
+          preferred_sports: prof?.preferred_sports || null,
+          training_days_per_week: prof?.training_days_per_week ?? null,
+        },
       },
     };
 
@@ -336,9 +362,67 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  // -------------------------
+  // /plan 7d (weekly plan generator)
+  if (text.startsWith("/plan")) {
+    const m = text.match(/\/plan\s+(\d+)\s*d?/i);
+    const days = m ? Number(m[1]) : 7;
+
+    // reuse aiinsight payload but ask for plan
+    const userRows = await sql`
+      SELECT goal_text, goal_date, preferred_sports, training_days_per_week
+      FROM users
+      WHERE telegram_user_id = ${telegramUserId}
+      LIMIT 1
+    `;
+    const prof = userRows[0] as any;
+
+    const w = await summarizeLoad(telegramUserId, 7);
+    const { fatigue, checkins } = await getCheckinSignals(telegramUserId, 7);
+
+    if (w.sessions === 0) {
+      await reply("Belum ada data. Tarik dulu: /sync 7d lalu /plan 7d");
+      return NextResponse.json({ ok: true });
+    }
+
+    const payload = {
+      days,
+      summary: {
+        sessions: w.sessions,
+        total_km: w.total_km,
+        total_hours: w.total_hours,
+        total_elev_m: w.total_elev_m,
+        by_type: w.by_type,
+        last_7_activities: [],
+        checkins_last_days: (checkins as any[]).map((c) => ({
+          day: String(c.day),
+          sleep_hours: c.sleep_hours != null ? Number(c.sleep_hours) : null,
+          soreness: c.soreness != null ? Number(c.soreness) : null,
+          mood: c.mood != null ? Number(c.mood) : null,
+          note: null,
+        })),
+        fatigue_index: fatigue,
+        profile: {
+          goal_text: prof?.goal_text || null,
+          goal_date: prof?.goal_date ? String(prof.goal_date).slice(0, 10) : null,
+          preferred_sports: prof?.preferred_sports || null,
+          training_days_per_week: prof?.training_days_per_week ?? null,
+        },
+        request: "Generate a 7-day plan. Mix endurance + strength. Include intensity guidance and rest/recovery days. Output Indonesian.",
+      },
+    };
+
+    try {
+      await reply("🗓️ Membuat weekly plan (AI)...");
+      const aiText = await generateAiInsight(payload as any);
+      await reply(`🗓️ Weekly Plan ${days} hari\n\n${aiText}`);
+    } catch (e: any) {
+      await reply(`Plan gagal: ${e?.message || String(e)}`);
+    }
+
+    return NextResponse.json({ ok: true });
+  }
+
   // /checkin
-  // -------------------------
   if (text.startsWith("/checkin")) {
     const args = Object.fromEntries(
       text
@@ -377,7 +461,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  // default
-  await reply("Perintah tersedia: /connect, /report, /sync, /insight, /aiinsight, /checkin");
+  await reply("Perintah tersedia: /connect, /sync, /insight, /aiinsight, /plan, /profile, /setgoal, /setpref, /autocoach, /checkin");
   return NextResponse.json({ ok: true });
 }
