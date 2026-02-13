@@ -21,13 +21,13 @@ export async function createOauthState(telegramUserId: number) {
 
 export function buildStravaAuthorizeUrl(state: string) {
   const clientId = process.env.STRAVA_CLIENT_ID;
-  const redirectUri = process.env.STRAVA_REDIRECT_URI;
-  if (!clientId || !redirectUri) throw new Error("Missing STRAVA_CLIENT_ID/STRAVA_REDIRECT_URI");
+  const redirectURL = process.env.STRAVA_REDIRECT_URL;
+  if (!clientId || !redirectURL) throw new Error("Missing STRAVA_CLIENT_ID/STRAVA_REDIRECT_URL");
 
   const params = new URLSearchParams({
     client_id: clientId,
     response_type: "code",
-    redirect_uri: redirectUri,
+    redirect_URL: redirectURL,
     approval_prompt: "auto",
     scope: "read,activity:read_all",
     state,
