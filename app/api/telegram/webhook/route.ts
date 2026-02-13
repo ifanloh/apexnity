@@ -30,7 +30,6 @@ export async function POST(req: NextRequest) {
     DO UPDATE SET telegram_chat_id = EXCLUDED.telegram_chat_id, updated_at = NOW()
   `;
 
-  // Helper: plain text only (no markdown chars)
   const reply = async (t: string) => {
     await sendTelegramMessage(chatId, t);
   };
@@ -41,8 +40,11 @@ export async function POST(req: NextRequest) {
         "Halo! Aku AI Pro Trainer kamu 👟🚴‍♂️🏋️‍♂️",
         "",
         "Perintah:",
-        "/connect  -> sambungkan Strava",
-        "/report   -> report aktivitas terakhir",
+        "/connect          -> sambungkan Strava",
+        "/report           -> report aktivitas terakhir (dari DB)",
+        "/sync 7d          -> minta approval tarik histori 7 hari",
+        "/syncgo 7         -> eksekusi tarik histori (setelah approval)",
+        "/insight 7d        -> insight 7 hari terakhir",
         "/checkin sleep=7 soreness=2 mood=4 note=ok",
       ].join("\n")
     );
@@ -50,7 +52,11 @@ export async function POST(req: NextRequest) {
   }
 
   if (text.startsWith("/connect")) {
-    if (!process.env.STRAVA_CLIENT_ID || !process.env.STRAVA_REDIRECT_URL) {
+    if (
+      !process.env.STRAVA_CLIENT_ID ||
+      !process.env.STRAVA_CLIENT_SECRET ||
+      !process.env.STRAVA_REDIRECT_URL
+    ) {
       await reply(
         "Konfigurasi Strava belum lengkap di server. Pastikan STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET, dan STRAVA_REDIRECT_URL sudah diisi di Vercel lalu redeploy."
       );
@@ -81,7 +87,9 @@ export async function POST(req: NextRequest) {
     `;
 
     if (rows.length === 0) {
-      await reply("Belum ada aktivitas tersimpan. Coba /connect dulu ya.");
+      await reply(
+        "Belum ada aktivitas tersimpan di database.\nKalau kamu punya histori 7 hari terakhir, ketik: /sync 7d"
+      );
     } else {
       const a = rows[0] as any;
       await reply(
@@ -101,27 +109,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-    if (text.startsWith("/sync")) {
-    // contoh: /sync 7d
-    const m = text.match(/\/sync\s+(\d+)\s*d?/i);
-    const days = m ? Number(m[1]) : 7;
-
-    await sendTelegramMessage(
-      chatId,
-      `Konfirmasi: aku akan menarik histori aktivitas ${days} hari terakhir dari Strava dan membuat insight. Balas: /syncgo ${days}`
-    );
-    return NextResponse.json({ ok: true });
-  }
-
+  // ✅ PENTING: /syncgo harus dicek duluan, karena /syncgo startsWith("/sync")
   if (text.startsWith("/syncgo")) {
     const m = text.match(/\/syncgo\s+(\d+)\s*d?/i);
     const days = m ? Number(m[1]) : 7;
 
-    // panggil job internal backfill
     const baseUrl = process.env.APP_BASE_URL;
     const jobSecret = process.env.INTERNAL_JOB_SECRET;
     if (!baseUrl || !jobSecret) {
-      await sendTelegramMessage(chatId, "Server belum lengkap konfigurasi APP_BASE_URL / INTERNAL_JOB_SECRET.");
+      await reply("Server belum lengkap konfigurasi APP_BASE_URL / INTERNAL_JOB_SECRET.");
       return NextResponse.json({ ok: true });
     }
 
@@ -136,11 +132,22 @@ export async function POST(req: NextRequest) {
 
     const payload = await res.text();
     if (!res.ok) {
-      await sendTelegramMessage(chatId, `Sync gagal: ${res.status}\n${payload}`);
+      await reply(`Sync gagal: ${res.status}\n${payload}`);
       return NextResponse.json({ ok: true });
     }
 
-    await sendTelegramMessage(chatId, `✅ Sync sukses.\n${payload}\n\nKetik /insight ${days}d untuk lihat insight.`);
+    await reply(`✅ Sync sukses.\n${payload}\n\nKetik /insight ${days}d untuk lihat insight.`);
+    return NextResponse.json({ ok: true });
+  }
+
+  if (text.startsWith("/sync")) {
+    // contoh: /sync 7d
+    const m = text.match(/\/sync\s+(\d+)\s*d?/i);
+    const days = m ? Number(m[1]) : 7;
+
+    await reply(
+      `Konfirmasi: aku akan menarik histori aktivitas ${days} hari terakhir dari Strava dan membuat insight.\nBalas: /syncgo ${days}`
+    );
     return NextResponse.json({ ok: true });
   }
 
@@ -163,7 +170,7 @@ export async function POST(req: NextRequest) {
     const sessions = r.sessions || 0;
 
     if (sessions === 0) {
-      await sendTelegramMessage(chatId, `Belum ada data ${days} hari terakhir. Mau tarik histori? ketik: /sync ${days}d`);
+      await reply(`Belum ada data ${days} hari terakhir. Mau tarik histori? ketik: /sync ${days}d`);
       return NextResponse.json({ ok: true });
     }
 
@@ -171,12 +178,10 @@ export async function POST(req: NextRequest) {
     const hrs = (Number(r.time_s) / 3600).toFixed(1);
     const elev = Number(r.elev_m);
 
-    // Insight sederhana (bisa kamu kembangkan)
     const avgKm = (Number(r.dist_m) / 1000 / sessions).toFixed(1);
     const avgElev = Math.round(elev / sessions);
 
-    await sendTelegramMessage(
-      chatId,
+    await reply(
       [
         `📈 Insight ${days} hari terakhir`,
         `Sesi: ${sessions}`,
@@ -206,7 +211,7 @@ export async function POST(req: NextRequest) {
 
     const sleep = args.sleep ? Number(args.sleep) : null;
     const soreness = args.soreness ? Number(args.soreness) : null;
-    const mood = args.mood ? Number(args.mood) : null;
+    const mood = args.mood ? Number(args.moodldap) : null;
     const note = args.note ? String(args.note) : null;
 
     const today = new Date();
@@ -229,7 +234,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  await reply("Perintah tersedia: /connect, /report, /checkin");
+  await reply("Perintah tersedia: /connect, /report, /sync, /insight, /checkin");
   return NextResponse.json({ ok: true });
 }
-
