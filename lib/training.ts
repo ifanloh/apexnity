@@ -131,3 +131,18 @@ export async function getCheckinSignals(telegramUserId: number, days: number) {
 
   return { fatigue, checkins: rows as any[] };
 }
+export function estimateRPEFromHR(
+  avgHR: number,
+  hrMax: number,
+  hrRest: number
+): number {
+  if (!avgHR || !hrMax || !hrRest) return 6; // fallback
+
+  const hrr = (avgHR - hrRest) / (hrMax - hrRest);
+
+  if (hrr < 0.55) return 5;
+  if (hrr < 0.65) return 6;
+  if (hrr < 0.75) return 7;
+  if (hrr < 0.85) return 8;
+  return 9;
+}
