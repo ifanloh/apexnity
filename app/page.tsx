@@ -124,6 +124,12 @@ export default async function Home() {
           <p style={{ color: "#777" }}>Belum ada check-in. Isi via Telegram: <b>/checkin sleep=7 soreness=2 mood=4 note=ok</b></p>
         )}
       </section>
+      <div>
+  Strava: <b>{data.stravaConnected ? "Connected ✅" : "Not connected ❌"}</b>
+  {data.stravaConnected && data.stravaInfo?.athlete_id ? (
+    <span style={{ color: "#666" }}> (athlete_id: {data.stravaInfo.athlete_id})</span>
+  ) : null}
+</div>
     </main>
   );
 }
