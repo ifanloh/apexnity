@@ -111,3 +111,12 @@ export async function getValidAccessTokenByAthleteId(athleteId: number) {
   `;
   return { accessToken: refreshed.access_token };
 }
+const estimatedRPE = estimateRPEFromHR(
+  activity.average_heartrate,
+  user.hr_max,
+  user.hr_rest
+);
+
+const sessionLoad = Math.round(
+  (activity.moving_time / 60) * estimatedRPE
+);
