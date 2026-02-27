@@ -37,13 +37,20 @@ export async function GET() {
   const { fatigue, checkins } = await getCheckinSignals(telegramUserId, 7);
 
   // strava connected? (cek token ada)
-  const sRows = await sql`
-    SELECT access_token
-    FROM strava_tokens
-    WHERE telegram_user_id = ${telegramUserId}
-    LIMIT 1
-  `;
-  const stravaConnected = sRows.length > 0;
+const sRows = await sql`
+  SELECT athlete_id, scopes, expires_at
+  FROM strava_accounts
+  WHERE telegram_user_id = ${telegramUserId}
+  LIMIT 1
+`;
+const stravaConnected = sRows.length > 0;
+const stravaInfo = sRows.length
+  ? {
+      athlete_id: (sRows[0] as any).athlete_id,
+      scopes: (sRows[0] as any).scopes,
+      expires_at: (sRows[0] as any).expires_at,
+    }
+  : null;
 
   return NextResponse.json({
     ok: true,
