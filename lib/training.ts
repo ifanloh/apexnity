@@ -131,12 +131,21 @@ export async function getCheckinSignals(telegramUserId: number, days: number) {
 
   return { fatigue, checkins: rows as any[] };
 }
+// lib/training.ts
+
+/**
+ * Estimate RPE (5-9) from Average Heart Rate using Heart Rate Reserve (HRR).
+ * HRR% = (avgHR - hrRest) / (hrMax - hrRest)
+ *
+ * Fallback: returns 6 if inputs invalid.
+ */
 export function estimateRPEFromHR(
-  avgHR: number,
-  hrMax: number,
-  hrRest: number
+  avgHR: number | null | undefined,
+  hrMax: number | null | undefined,
+  hrRest: number | null | undefined
 ): number {
-  if (!avgHR || !hrMax || !hrRest) return 6; // fallback
+  if (!avgHR || !hrMax || !hrRest) return 6;
+  if (hrMax <= hrRest) return 6;
 
   const hrr = (avgHR - hrRest) / (hrMax - hrRest);
 
