@@ -56,6 +56,7 @@ const stravaInfo = sRows.length
     ok: true,
     profile: profile || null,
     stravaConnected,
+    stravaInfo,
     lastActivity: lastActivity || null,
     summary7d: sum7,
     fatigueIndex: fatigue,
